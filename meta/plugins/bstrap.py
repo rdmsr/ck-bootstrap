@@ -14,10 +14,12 @@ defaultMachineName = f"{containerNamePrefix}machine"
 cacheSourcesDir = os.path.join(const.CACHE_DIR, "sources")
 cacheBuildsDir = os.path.join(const.CACHE_DIR, "builds")
 
+
 @dt.dataclass
 class Image:
     id: str
     setup: list[str]
+
 
 IMAGES: dict[str, Image] = {
     "debian": Image(
@@ -26,16 +28,17 @@ IMAGES: dict[str, Image] = {
             "apt-get update",
             "apt-get install -y python3 python3-pip python3-venv ninja-build build-essential git",
         ],
-        )
+    )
 }
+
 
 class InitArgs(model.RegistryArgs):
     image: str = cli.arg(None, "image", "Which OS image to use", default=defaultImage)
 
 
-
 def printProgress(str):
     print(f"{vt100.BOLD}{str}... {vt100.RESET}", end="", flush=True)
+
 
 def printDone():
     print(f"{vt100.GREEN}Done{vt100.RESET}")
@@ -48,20 +51,32 @@ def machineExists(name: str) -> bool:
     except:
         return False
 
+
 def containerExists(name: str) -> bool:
     try:
         shell.exec("podman", "container", "exists", name)
         return True
     except:
         return False
-    
+
 
 def createContainer(name: str, image: str):
-    shell.exec("podman", "run", "-v", f"{os.getcwd()}:/cutekit-bootstrap", "-dit", "--name", name, image, "/bin/bash")
+    shell.exec(
+        "podman",
+        "run",
+        "-v",
+        f"{os.getcwd()}:/cutekit-bootstrap",
+        "-dit",
+        "--name",
+        name,
+        image,
+        "/bin/bash",
+    )
     img = IMAGES[image]
 
     for cmd in img.setup:
         execInContainer(name, cmd)
+
 
 def execInContainer(name: str, command: str):
     try:
@@ -69,31 +84,46 @@ def execInContainer(name: str, command: str):
     except shell.ShellException:
         shell.exec("podman", "restart", name)
         shell.exec("podman", "exec", name, "/bin/sh", "-c", f"{command}")
-        
+
 
 def runCutekitCommandInContainer(container: str, command: str):
-    execInContainer(container, f"cd /cutekit-bootstrap && ./meta/plugins/run.sh bootstrap {command} --in-container=true")
-     
-def tryCreateContainer(name: str = defaultContainerName, image: str = defaultImage) -> None:
+    execInContainer(
+        container,
+        f"cd /cutekit-bootstrap && ./meta/plugins/run.sh bootstrap {command} --in-container=true",
+    )
+
+
+def tryCreateContainer(
+    name: str = defaultContainerName, image: str = defaultImage
+) -> None:
     if not containerExists(name):
         createContainer(name, image)
 
 
 def tryCreateMachine() -> None:
-   printProgress(f"Starting machine '{defaultMachineName}'")
-   if not machineExists(defaultMachineName):
-       shell.exec("podman", "machine", "stop")
-       shell.exec("podman", "machine", "init", defaultMachineName, "--rootful", "-v", os.getcwd(), "--now", quiet=True)
-   else:
-       try:
-           shell.exec("podman", "machine", "start", defaultMachineName, quiet=True)
-       except shell.ShellException:
-           pass
-   # This sucks, but it seems like we have no other choice
-   shell.exec("podman", "system", "connection", "default", defaultMachineName)
+    printProgress(f"Starting machine '{defaultMachineName}'")
+    if not machineExists(defaultMachineName):
+        shell.exec("podman", "machine", "stop")
+        shell.exec(
+            "podman",
+            "machine",
+            "init",
+            defaultMachineName,
+            "--rootful",
+            "-v",
+            os.getcwd(),
+            "--now",
+            quiet=True,
+        )
+    else:
+        try:
+            shell.exec("podman", "machine", "start", defaultMachineName, quiet=True)
+        except shell.ShellException:
+            pass
+    # This sucks, but it seems like we have no other choice
+    shell.exec("podman", "system", "connection", "default", defaultMachineName)
 
-   printDone()
-
+    printDone()
 
 
 def fetchRecipe(expr: dict) -> None:
@@ -108,8 +138,9 @@ def fetchRecipe(expr: dict) -> None:
     name = expr["id"]
 
     if not has_checksum:
-        vt100.warning(f"'{name}' has no source checksum specified... data integrity will not be verified")
-
+        vt100.warning(
+            f"'{name}' has no source checksum specified... data integrity will not be verified"
+        )
 
     printProgress(f"Fetching recipe '{name}'")
 
@@ -120,11 +151,13 @@ def fetchRecipe(expr: dict) -> None:
     path = shell.wget(url)
     printDone()
 
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         if has_checksum:
-            checksum_parts = expr["source"]["checksum"].split(':')
-            
-            if checksum_parts[1] != str(hashlib.file_digest(f, checksum_parts[0]).hexdigest()):
+            checksum_parts = expr["source"]["checksum"].split(":")
+
+            if checksum_parts[1] != str(
+                hashlib.file_digest(f, checksum_parts[0]).hexdigest()
+            ):
                 raise RuntimeError("Could not verify data integrity: invalid checksum")
 
     if not os.path.exists(cacheSourcesDir):
@@ -144,18 +177,18 @@ def fetchRecipe(expr: dict) -> None:
     tf.close()
     os.rmdir(tmpdir)
 
-    shell.cpTree(sources_dir, sources_dir + '-clean')
+    shell.cpTree(sources_dir, sources_dir + "-clean")
 
 
 def buildRecipe(expr: dict, quiet: bool) -> None:
-    build_dir = os.path.join(cacheBuildsDir, expr['id'])
-    sources_dir = os.path.join(cacheSourcesDir, expr['id'])
+    build_dir = os.path.join(cacheBuildsDir, expr["id"])
+    sources_dir = os.path.join(cacheSourcesDir, expr["id"])
 
-    built_file = os.path.join(cacheBuildsDir, expr['id'] + '.built')
+    built_file = os.path.join(cacheBuildsDir, expr["id"] + ".built")
 
-    if wasRecipeBuilt(expr['id']):
+    if wasRecipeBuilt(expr["id"]):
         return
-    
+
     steps = expr["steps"]
 
     printProgress(f"Building recipe '{expr['id']}'")
@@ -163,31 +196,30 @@ def buildRecipe(expr: dict, quiet: bool) -> None:
     shell.cpTree(sources_dir, build_dir)
 
     for step in steps["build"]:
-        shell.exec(*step.split(' '), cwd=build_dir, quiet=quiet)
+        shell.exec(*step.split(" "), cwd=build_dir, quiet=quiet)
 
     printDone()
 
-    with open(built_file, 'w') as f:
-        f.write('')
-        
+    with open(built_file, "w") as f:
+        f.write("")
+
 
 def packageRecipe(expr: dict) -> None:
     steps = expr["steps"]
     printProgress(f"Packaging recipe '{expr['id']}'")
 
-    build_dir = os.path.join(cacheBuildsDir, expr['id'])
-    sources_dir = os.path.join(cacheSourcesDir, expr['id'])
+    build_dir = os.path.join(cacheBuildsDir, expr["id"])
+    sources_dir = os.path.join(cacheSourcesDir, expr["id"])
 
     shell.cpTree(sources_dir, build_dir)
 
     for step in steps["package"]:
-        shell.exec(*step.split(' '), cwd=build_dir)
+        shell.exec(*step.split(" "), cwd=build_dir)
 
     printDone()
 
 
 def setupContainer(image: str):
-
     if shell.uname().sysname != "linux":
         tryCreateMachine()
 
@@ -204,10 +236,10 @@ def doBuild(recipe: str, quiet: bool):
 
 
 def wasRecipeBuilt(recipe: str):
-    built_file = os.path.join(cacheBuildsDir, recipe + '.built')
+    built_file = os.path.join(cacheBuildsDir, recipe + ".built")
     return os.path.exists(built_file)
 
-    
+
 @cli.command(None, "bootstrap", "Bootstrap distribution")
 def _():
     pass
@@ -215,26 +247,29 @@ def _():
 
 class BuildArgs(model.RegistryArgs):
     name: str = cli.arg(None, "recipe", "Recipe to build")
-    in_container: bool = cli.arg(False, "in-container", "Whether or not this is run in the container")
+    in_container: bool = cli.arg(
+        False, "in-container", "Whether or not this is run in the container"
+    )
     quiet: bool = cli.arg(False, "quiet", "Whether or not to silence command output")
 
 
-
 class BuildAllArgs(model.RegistryArgs):
-    in_container: bool = cli.arg(False, "in-container", "Whether or not this is run in the container")
+    in_container: bool = cli.arg(
+        False, "in-container", "Whether or not this is run in the container"
+    )
     quiet: bool = cli.arg(False, "quiet", "Whether or not to silence command output")
 
 
 class PatchArgs(model.RegistryArgs):
     recipe: str = cli.arg(None, "recipe", "Recipe to patch")
 
+
 @cli.command(None, "bootstrap/build-all", "Build all packages")
 def _(args: BuildAllArgs):
-
     if args.in_container:
         if os.path.exists("recipes"):
             for file in os.listdir("recipes"):
-                recipe_name = file.split('.')[0]
+                recipe_name = file.split(".")[0]
 
                 if wasRecipeBuilt(recipe_name):
                     print(f"{recipe_name}: no work to do")
@@ -245,8 +280,10 @@ def _(args: BuildAllArgs):
         else:
             raise RuntimeError("No 'recipes' directory!")
     else:
-        runCutekitCommandInContainer(defaultContainerName, f"build-all --quiet={args.quiet}")
-            
+        runCutekitCommandInContainer(
+            defaultContainerName, f"build-all --quiet={args.quiet}"
+        )
+
 
 @cli.command(None, "bootstrap/build", "Build a recipe")
 def _(args: BuildArgs):
@@ -257,11 +294,14 @@ def _(args: BuildArgs):
     if args.in_container:
         doBuild(args.name, args.quiet)
     else:
-        runCutekitCommandInContainer(defaultContainerName, f"build --recipe={args.name} --quiet={args.quiet}")
+        runCutekitCommandInContainer(
+            defaultContainerName, f"build --recipe={args.name} --quiet={args.quiet}"
+        )
+
 
 @cli.command(None, "bootstrap/rebuild", "Rebuild a recipe")
 def _(args: BuildArgs):
-    built_file = os.path.join(cacheBuildsDir, args.name + '.built')
+    built_file = os.path.join(cacheBuildsDir, args.name + ".built")
 
     if wasRecipeBuilt(args.name):
         shell.rmrf(built_file)
@@ -274,7 +314,9 @@ def _(args: BuildArgs):
         else:
             raise RuntimeError(f"No such recipe: {args.name}")
     else:
-        runCutekitCommandInContainer(defaultContainerName, f"build --recipe={args.name} --quiet={args.quiet}")
+        runCutekitCommandInContainer(
+            defaultContainerName, f"build --recipe={args.name} --quiet={args.quiet}"
+        )
 
 
 @cli.command(None, "bootstrap/make-patch", "Start the patching process")
@@ -286,19 +328,24 @@ def _(args: PatchArgs):
         raise RuntimeError("Recipe sources were not fetched yet")
 
     shell.cpTree(sources_clean_dir, f"{args.recipe}-workdir")
-    print(f"Created new directory '{args.recipe}-workdir', make your changes and run 'save-patch'")
+    print(
+        f"Created new directory '{args.recipe}-workdir', make your changes and run 'save-patch'"
+    )
 
 
 @cli.command(None, "bootstrap/save-patch", "Save modifications into a patch")
 def _(args: PatchArgs):
-    workdir = (args.recipe + "-workdir")
+    workdir = args.recipe + "-workdir"
     sources_clean_dir = os.path.join(cacheSourcesDir, args.recipe + "-clean")
 
-    proc = subprocess.run(["git", "diff", "--no-index", "--no-prefix", sources_clean_dir, workdir], check=False, stdout=subprocess.PIPE)
+    proc = subprocess.run(
+        ["git", "diff", "--no-index", "--no-prefix", sources_clean_dir, workdir],
+        check=False,
+        stdout=subprocess.PIPE,
+    )
 
     with open(args.recipe + ".patch", "wb") as f:
         f.write(proc.stdout)
-        
 
     print(f"Saved patch to {args.recipe+'.patch'}")
 
@@ -306,9 +353,6 @@ def _(args: PatchArgs):
 
     if remove:
         shell.rmrf(workdir)
-
-
-
 
 
 # TODO: Do container setup in 'build' if init wasn't called
