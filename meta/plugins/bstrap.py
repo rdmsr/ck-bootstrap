@@ -1,8 +1,8 @@
 from dataclasses_json import DataClassJsonMixin
 from cutekit import shell, vt100, cli, model, const, jexpr
 from typing import Optional
-import os
-import pathlib
+from pathlib import Path
+
 import hashlib
 import tarfile
 import tempfile
@@ -13,8 +13,9 @@ containerNamePrefix = "CK__"
 defaultImage = "debian"
 defaultContainerName = f"{containerNamePrefix}default"
 defaultMachineName = f"{containerNamePrefix}machine"
-cacheSourcesDir = os.path.join(const.CACHE_DIR, "sources")
-cacheBuildsDir = os.path.join(const.CACHE_DIR, "builds")
+cacheSourcesDir = Path(const.CACHE_DIR) / "sources"
+cacheBuildsDir = Path(const.CACHE_DIR) / "builds"
+recipeDir = Path("recipes")
 
 
 @dt.dataclass
@@ -92,7 +93,7 @@ def createContainer(name: str, image: str) -> None:
         "podman",
         "run",
         "-v",
-        f"{os.getcwd()}:/cutekit-bootstrap",
+        f"{Path.cwd()}:/cutekit-bootstrap",
         "-dit",
         "--name",
         name,
@@ -138,7 +139,7 @@ def tryCreateMachine() -> None:
             defaultMachineName,
             "--rootful",
             "-v",
-            os.getcwd(),
+            str(Path.cwd()),
             "--now",
             quiet=True,
         )
@@ -154,9 +155,9 @@ def tryCreateMachine() -> None:
 
 
 def fetchRecipe(r: Recipe) -> None:
-    sources_dir = os.path.join(cacheSourcesDir, r.id)
+    sources_dir = cacheSourcesDir / r.id
 
-    if os.path.exists(sources_dir):
+    if sources_dir.exists():
         return
 
     if r.source.checksum is None:
@@ -182,8 +183,7 @@ def fetchRecipe(r: Recipe) -> None:
             ):
                 raise RuntimeError("Could not verify data integrity: invalid checksum")
 
-    if not os.path.exists(cacheSourcesDir):
-        shell.mkdir(cacheSourcesDir)
+    cacheSourcesDir.mkdir(parents=True, exist_ok=True)
 
     # Make a temporary directory and extract there
     tmpdir = tempfile.mkdtemp(dir=const.CACHE_DIR)
@@ -193,47 +193,46 @@ def fetchRecipe(r: Recipe) -> None:
     tf.extractall(tmpdir)
 
     # Move all files in sources/<recipe>, this is to avoid having something like sources/hello/hello-2.1
-    for file in os.listdir(tmpdir):
-        shell.mv(os.path.join(tmpdir, file), sources_dir)
+    for file in Path(tmpdir).iterdir():
+        shell.mv(str(file), str(sources_dir))
 
     tf.close()
-    os.rmdir(tmpdir)
+    shell.rmrf(str(tmpdir))
 
-    shell.cpTree(sources_dir, sources_dir + "-clean")
+    shell.cpTree(str(sources_dir), f"{sources_dir}-clean")
 
 
 def buildRecipe(r: Recipe, quiet: bool) -> None:
-    build_dir = os.path.join(cacheBuildsDir, r.id)
-    sources_dir = os.path.join(cacheSourcesDir, r.id)
-
-    built_file = os.path.join(cacheBuildsDir, r.id + ".built")
+    build_dir = cacheBuildsDir / r.id
+    sources_dir = cacheSourcesDir / r.id
+    built_file = cacheBuildsDir / f"{r.id}.built"
 
     if wasRecipeBuilt(r.id):
         return
 
     printProgress(f"Building recipe '{r.id}'")
 
-    shell.cpTree(sources_dir, build_dir)
+    shell.cpTree(str(sources_dir), str(build_dir))
 
     for step in r.steps.build:
-        shell.exec(*step.split(" "), cwd=build_dir, quiet=quiet)
+        shell.exec(*step.split(" "), cwd=str(build_dir), quiet=quiet)
 
     printDone()
 
-    with open(built_file, "w") as f:
+    with built_file.open("w") as f:
         f.write("")
 
 
 def packageRecipe(r: Recipe) -> None:
     printProgress(f"Packaging recipe '{r.id}'")
 
-    build_dir = os.path.join(cacheBuildsDir, r.id)
-    sources_dir = os.path.join(cacheSourcesDir, r.id)
+    build_dir = cacheBuildsDir / r.id
+    sources_dir = cacheSourcesDir / r.id
 
-    shell.cpTree(sources_dir, build_dir)
+    shell.cpTree(str(sources_dir), str(build_dir))
 
     for step in r.steps.package:
-        shell.exec(*step.split(" "), cwd=build_dir)
+        shell.exec(*step.split(" "), cwd=str(build_dir))
 
     printDone()
 
@@ -246,19 +245,17 @@ def setupContainer(image: str) -> None:
 
 
 def doBuild(recipe: str, quiet: bool) -> None:
-    if os.path.exists(f"recipes/{recipe}.json"):
-        expr = jexpr.read(pathlib.Path(f"recipes/{recipe}.json"))
+    if (recipeDir / f"{recipe}.json").exists():
+        expr = jexpr.read(recipeDir / f"{recipe}.json")
         r = Recipe.from_dict(expr)
-
         fetchRecipe(r)
-        # buildRecipe(expr, quiet)
+        buildRecipe(r, quiet)
     else:
         raise RuntimeError(f"No such recipe: {recipe}")
 
 
 def wasRecipeBuilt(recipe: str) -> bool:
-    built_file = os.path.join(cacheBuildsDir, recipe + ".built")
-    return os.path.exists(built_file)
+    return (cacheBuildsDir / f"{recipe}.built").exists()
 
 
 @cli.command(None, "bootstrap", "Bootstrap distribution")
@@ -288,15 +285,13 @@ class PatchArgs(model.RegistryArgs):
 @cli.command(None, "bootstrap/build-all", "Build all packages")
 def _(args: BuildAllArgs):
     if args.in_container:
-        if os.path.exists("recipes"):
-            for file in os.listdir("recipes"):
-                recipe_name = file.split(".")[0]
-
-                if wasRecipeBuilt(recipe_name):
-                    print(f"{recipe_name}: no work to do")
+        if recipeDir.exists():
+            for file in recipeDir.iterdir():
+                if wasRecipeBuilt(file.stem):
+                    print(f"{file.stem}: no work to do")
                     continue
 
-                doBuild(recipe_name, args.quiet)
+                doBuild(file.stem, args.quiet)
 
         else:
             raise RuntimeError("No 'recipes' directory!")
@@ -322,14 +317,14 @@ def _(args: BuildArgs):
 
 @cli.command(None, "bootstrap/rebuild", "Rebuild a recipe")
 def _(args: BuildArgs):
-    built_file = os.path.join(cacheBuildsDir, args.name + ".built")
+    built_file = cacheBuildsDir / f"{args.name}.built"
 
     if wasRecipeBuilt(args.name):
-        shell.rmrf(built_file)
+        shell.rmrf(str(built_file))
 
     if args.in_container:
-        if os.path.exists(f"recipes/{args.name}.json"):
-            expr = jexpr.read(pathlib.Path(f"recipes/{args.name}.json"))
+        if (recipeDir / f"{args.name}.json").exists():
+            expr = jexpr.read(recipeDir / f"{args.name}.json")
             recipe = Recipe.from_dict(expr)
 
             fetchRecipe(recipe)
@@ -344,13 +339,13 @@ def _(args: BuildArgs):
 
 @cli.command(None, "bootstrap/make-patch", "Start the patching process")
 def _(args: PatchArgs):
-    sources_clean_dir = os.path.join(cacheSourcesDir, args.recipe + "-clean")
+    sources_clean_dir = cacheSourcesDir / f"{args.recipe}-clean"
 
     # TODO: fetch if not fetched already
-    if not os.path.exists(sources_clean_dir):
+    if not sources_clean_dir.exists():
         raise RuntimeError("Recipe sources were not fetched yet")
 
-    shell.cpTree(sources_clean_dir, f"{args.recipe}-workdir")
+    shell.cpTree(str(sources_clean_dir), f"{args.recipe}-workdir")
     print(
         f"Created new directory '{args.recipe}-workdir', make your changes and run 'save-patch'"
     )
@@ -358,8 +353,8 @@ def _(args: PatchArgs):
 
 @cli.command(None, "bootstrap/save-patch", "Save modifications into a patch")
 def _(args: PatchArgs):
-    workdir = args.recipe + "-workdir"
-    sources_clean_dir = os.path.join(cacheSourcesDir, args.recipe + "-clean")
+    workdir = Path.cwd() / f"{args.recipe}-workdir"
+    sources_clean_dir = cacheSourcesDir / f"{args.recipe}-clean"
 
     proc = subprocess.run(
         ["git", "diff", "--no-index", "--no-prefix", sources_clean_dir, workdir],
@@ -370,12 +365,12 @@ def _(args: PatchArgs):
     with open(args.recipe + ".patch", "wb") as f:
         f.write(proc.stdout)
 
-    print(f"Saved patch to {args.recipe+'.patch'}")
+    print(f"Save patch to {args.recipe}.patch")
 
     remove = vt100.ask("Remove workdir directory?", default=True)
 
     if remove:
-        shell.rmrf(workdir)
+        shell.rmrf(str(workdir))
 
 
 # TODO: Do container setup in 'build' if init wasn't called
