@@ -187,7 +187,8 @@ def packageRecipe(expr: dict) -> None:
 
 
 def setupContainer(image: str):
-    if shell.uname().machine != "linux":
+
+    if shell.uname().sysname != "linux":
         tryCreateMachine()
 
     tryCreateContainer(image=image)
