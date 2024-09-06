@@ -76,7 +76,7 @@ def machineExists(name: str) -> bool:
     try:
         shell.exec("podman", "machine", "inspect", name, quiet=True)
         return True
-    except:
+    except shell.ShellException:
         return False
 
 
@@ -84,7 +84,7 @@ def containerExists(name: str) -> bool:
     try:
         shell.exec("podman", "container", "exists", name)
         return True
-    except:
+    except shell.ShellException:
         return False
 
 
