@@ -1,4 +1,6 @@
+from dataclasses_json import DataClassJsonMixin
 from cutekit import shell, vt100, cli, model, const, jexpr
+from typing import Optional
 import os
 import pathlib
 import hashlib
@@ -13,6 +15,31 @@ defaultContainerName = f"{containerNamePrefix}default"
 defaultMachineName = f"{containerNamePrefix}machine"
 cacheSourcesDir = os.path.join(const.CACHE_DIR, "sources")
 cacheBuildsDir = os.path.join(const.CACHE_DIR, "builds")
+
+
+@dt.dataclass
+class Steps(DataClassJsonMixin):
+    build: list[str]
+    package: list[str]
+
+
+@dt.dataclass
+class RecipeRequirements(DataClassJsonMixin):
+    host: list[str]
+
+
+@dt.dataclass
+class RecipeSource(DataClassJsonMixin):
+    url: str
+    method: str
+    checksum: Optional[str]
+
+
+@dt.dataclass
+class Recipe(DataClassJsonMixin):
+    id: str
+    source: RecipeSource
+    steps: Steps
 
 
 @dt.dataclass
@@ -36,11 +63,11 @@ class InitArgs(model.RegistryArgs):
     image: str = cli.arg(None, "image", "Which OS image to use", default=defaultImage)
 
 
-def printProgress(str):
+def printProgress(str) -> None:
     print(f"{vt100.BOLD}{str}... {vt100.RESET}", end="", flush=True)
 
 
-def printDone():
+def printDone() -> None:
     print(f"{vt100.GREEN}Done{vt100.RESET}")
 
 
@@ -60,7 +87,7 @@ def containerExists(name: str) -> bool:
         return False
 
 
-def createContainer(name: str, image: str):
+def createContainer(name: str, image: str) -> None:
     shell.exec(
         "podman",
         "run",
@@ -78,7 +105,7 @@ def createContainer(name: str, image: str):
         execInContainer(name, cmd)
 
 
-def execInContainer(name: str, command: str):
+def execInContainer(name: str, command: str) -> None:
     try:
         shell.exec("podman", "exec", name, "/bin/sh", "-c", f"{command}")
     except shell.ShellException:
@@ -86,7 +113,7 @@ def execInContainer(name: str, command: str):
         shell.exec("podman", "exec", name, "/bin/sh", "-c", f"{command}")
 
 
-def runCutekitCommandInContainer(container: str, command: str):
+def runCutekitCommandInContainer(container: str, command: str) -> None:
     execInContainer(
         container,
         f"cd /cutekit-bootstrap && ./meta/plugins/run.sh bootstrap {command} --in-container=true",
@@ -126,34 +153,29 @@ def tryCreateMachine() -> None:
     printDone()
 
 
-def fetchRecipe(expr: dict) -> None:
-    sources_dir = os.path.join(cacheSourcesDir, expr["id"])
+def fetchRecipe(r: Recipe) -> None:
+    sources_dir = os.path.join(cacheSourcesDir, r.id)
 
     if os.path.exists(sources_dir):
         return
 
-    url = expr["source"]["url"]
-    method = expr["source"]["method"]
-    has_checksum = expr["source"].get("checksum") is not None
-    name = expr["id"]
-
-    if not has_checksum:
+    if r.source.checksum is None:
         vt100.warning(
-            f"'{name}' has no source checksum specified... data integrity will not be verified"
+            f"'{r.id}' has no source checksum specified... data integrity will not be verified"
         )
 
-    printProgress(f"Fetching recipe '{name}'")
+    printProgress(f"Fetching recipe '{r.id}'")
 
     # TODO: Add git support
-    if method != "tarball":
-        raise RuntimeError(f"Unknown source method '{method}'")
+    if r.source.method != "tarball":
+        raise RuntimeError(f"Unknown source method '{r.source.method}'")
 
-    path = shell.wget(url)
+    path = shell.wget(r.source.url)
     printDone()
 
     with open(path, "rb") as f:
-        if has_checksum:
-            checksum_parts = expr["source"]["checksum"].split(":")
+        if r.source.checksum is not None:
+            checksum_parts = r.source.checksum.split(":")
 
             if checksum_parts[1] != str(
                 hashlib.file_digest(f, checksum_parts[0]).hexdigest()
@@ -180,22 +202,20 @@ def fetchRecipe(expr: dict) -> None:
     shell.cpTree(sources_dir, sources_dir + "-clean")
 
 
-def buildRecipe(expr: dict, quiet: bool) -> None:
-    build_dir = os.path.join(cacheBuildsDir, expr["id"])
-    sources_dir = os.path.join(cacheSourcesDir, expr["id"])
+def buildRecipe(r: Recipe, quiet: bool) -> None:
+    build_dir = os.path.join(cacheBuildsDir, r.id)
+    sources_dir = os.path.join(cacheSourcesDir, r.id)
 
-    built_file = os.path.join(cacheBuildsDir, expr["id"] + ".built")
+    built_file = os.path.join(cacheBuildsDir, r.id + ".built")
 
-    if wasRecipeBuilt(expr["id"]):
+    if wasRecipeBuilt(r.id):
         return
 
-    steps = expr["steps"]
-
-    printProgress(f"Building recipe '{expr['id']}'")
+    printProgress(f"Building recipe '{r.id}'")
 
     shell.cpTree(sources_dir, build_dir)
 
-    for step in steps["build"]:
+    for step in r.steps.build:
         shell.exec(*step.split(" "), cwd=build_dir, quiet=quiet)
 
     printDone()
@@ -204,38 +224,39 @@ def buildRecipe(expr: dict, quiet: bool) -> None:
         f.write("")
 
 
-def packageRecipe(expr: dict) -> None:
-    steps = expr["steps"]
-    printProgress(f"Packaging recipe '{expr['id']}'")
+def packageRecipe(r: Recipe) -> None:
+    printProgress(f"Packaging recipe '{r.id}'")
 
-    build_dir = os.path.join(cacheBuildsDir, expr["id"])
-    sources_dir = os.path.join(cacheSourcesDir, expr["id"])
+    build_dir = os.path.join(cacheBuildsDir, r.id)
+    sources_dir = os.path.join(cacheSourcesDir, r.id)
 
     shell.cpTree(sources_dir, build_dir)
 
-    for step in steps["package"]:
+    for step in r.steps.package:
         shell.exec(*step.split(" "), cwd=build_dir)
 
     printDone()
 
 
-def setupContainer(image: str):
+def setupContainer(image: str) -> None:
     if shell.uname().sysname != "linux":
         tryCreateMachine()
 
     tryCreateContainer(image=image)
 
 
-def doBuild(recipe: str, quiet: bool):
+def doBuild(recipe: str, quiet: bool) -> None:
     if os.path.exists(f"recipes/{recipe}.json"):
         expr = jexpr.read(pathlib.Path(f"recipes/{recipe}.json"))
-        fetchRecipe(expr)
-        buildRecipe(expr, quiet)
+        r = Recipe.from_dict(expr)
+
+        fetchRecipe(r)
+        # buildRecipe(expr, quiet)
     else:
         raise RuntimeError(f"No such recipe: {recipe}")
 
 
-def wasRecipeBuilt(recipe: str):
+def wasRecipeBuilt(recipe: str) -> bool:
     built_file = os.path.join(cacheBuildsDir, recipe + ".built")
     return os.path.exists(built_file)
 
@@ -248,16 +269,16 @@ def _():
 class BuildArgs(model.RegistryArgs):
     name: str = cli.arg(None, "recipe", "Recipe to build")
     in_container: bool = cli.arg(
-        False, "in-container", "Whether or not this is run in the container"
+        None, "in-container", "Whether or not this is run in the container"
     )
-    quiet: bool = cli.arg(False, "quiet", "Whether or not to silence command output")
+    quiet: bool = cli.arg(None, "quiet", "Whether or not to silence command output")
 
 
 class BuildAllArgs(model.RegistryArgs):
     in_container: bool = cli.arg(
-        False, "in-container", "Whether or not this is run in the container"
+        None, "in-container", "Whether or not this is run in the container"
     )
-    quiet: bool = cli.arg(False, "quiet", "Whether or not to silence command output")
+    quiet: bool = cli.arg(None, "quiet", "Whether or not to silence command output")
 
 
 class PatchArgs(model.RegistryArgs):
@@ -309,8 +330,10 @@ def _(args: BuildArgs):
     if args.in_container:
         if os.path.exists(f"recipes/{args.name}.json"):
             expr = jexpr.read(pathlib.Path(f"recipes/{args.name}.json"))
-            fetchRecipe(expr)
-            buildRecipe(expr, args.quiet)
+            recipe = Recipe.from_dict(expr)
+
+            fetchRecipe(recipe)
+            buildRecipe(recipe, args.quiet)
         else:
             raise RuntimeError(f"No such recipe: {args.name}")
     else:
