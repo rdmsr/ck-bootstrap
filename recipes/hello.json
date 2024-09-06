@@ -1,0 +1,19 @@
+{
+    "id": "hello",
+
+    "source": {
+	"method": "tarball",
+	"url": "https://ftp.gnu.org/gnu/hello/hello-2.12.tar.gz",
+	"checksum": "blake2b:62a977d27c3e9a2a3d3998bf4f9b1dd8323d88a603138a80ad423d51493f9c99bed418dfc64ee55c23587d727865bf149affed6fe40b782d8ca9384346ba6414"
+	
+    },
+
+    "requires": {
+	"host": ["autotools", "gcc"]
+    },
+    
+    "steps": {
+	"build": ["./configure", "make"],
+	"package": ["DESTDIR=lol make install"]
+    }
+}

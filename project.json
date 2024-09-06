@@ -1,0 +1,6 @@
+{
+    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.project.v1",
+    "id": "ck-bootstrap",
+    "type": "project",
+    "description": "Bootstrap OS distributions"
+}
